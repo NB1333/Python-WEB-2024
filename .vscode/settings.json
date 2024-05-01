@@ -1,0 +1,14 @@
+{
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5433,
+            "driver": "PostgreSQL",
+            "database": "financial_exchange",
+            "username": "myuser",
+            "password": "mypassword",
+            "name": "exchange"
+        }
+    ]
+}

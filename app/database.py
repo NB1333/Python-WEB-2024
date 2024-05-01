@@ -1,10 +1,8 @@
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+import psycopg
+from psycopg_pool import ConnectionPool
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./financial_exchange.db"
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+# Connection URI
+DATABASE_URL = "postgresql://myuser:mypassword@localhost:5433/financial_exchange"
+
+# Create a connection pool
+conn_pool = ConnectionPool(DATABASE_URL)
