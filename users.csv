@@ -1,0 +1,4 @@
+id,username,hashed_password,is_admin
+1,john_doe,hashedpassword123,0
+2,admin_user,secureadminpass,1
+3,graygrey,$2a$06$FXQSQVuwj4Lwo2scmJY3mOv6fVMY82IMHcU17kqdDbee3aKIAn4dm,0

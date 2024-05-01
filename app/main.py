@@ -67,16 +67,23 @@
 #     return HTMLResponse(content=f"<html><body><h1>User {user_id} deleted</h1></body></html>")
 
 
-from fastapi import FastAPI, HTTPException, Form, Path
+from pymongo import MongoClient
+from fastapi import FastAPI, HTTPException, Path
 from fastapi.responses import HTMLResponse
-from .database import conn_pool
 from pydantic import BaseModel
+from .database import MONGO_URL
+import uuid  # UUID generator
 
 app = FastAPI(title="Financial Exchange API", version="1.0.0", description="API for managing financial transactions")
+
+client = MongoClient(MONGO_URL)
+db = client.financial_exchange  # Access the database
+users_collection = db.users     # Access the users collection
 
 class UserCreate(BaseModel):
     username: str
     password: str
+    is_admin: bool = False  # Default value for new users
 
 class UserUpdate(BaseModel):
     username: str
@@ -84,67 +91,124 @@ class UserUpdate(BaseModel):
 
 @app.post("/users/", response_class=HTMLResponse)
 def create_user(user: UserCreate):
-    try:
-        with conn_pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT * FROM users WHERE username = %s", (user.username,))
-                if cur.fetchone() is not None:
-                    return HTMLResponse(content="<html><body><h1>Error: Username already registered</h1></body></html>", status_code=400)
-                
-                cur.execute("INSERT INTO users (username, hashed_password) VALUES (%s, crypt(%s, gen_salt('bf')))", (user.username, user.password))
-                conn.commit()
-        return HTMLResponse(content=f"<html><body><h1>User {user.username} successfully created.</h1></body></html>", status_code=201)
-    except errors.UniqueViolation as e:
-        return HTMLResponse(content=f"<html><body><h1>Error: User ID already exists.</h1></body></html>", status_code=400)
-    except Exception as e:
-        return HTMLResponse(content=f"<html><body><h1>Server Error: {str(e)}</h1></body></html>", status_code=500)
+    existing_user = users_collection.find_one({"username": user.username})
+    if existing_user:
+        return HTMLResponse(content="<html><body><h1>Error: Username already registered</h1></body></html>", status_code=400)
+
+    # Generate a unique UUID for each new user
+    user_id = str(uuid.uuid4())  # Convert UUID format to string for ease of storage and manipulation
+
+    users_collection.insert_one({
+        "id": user_id,  # Use the UUID as the custom ID
+        "username": user.username,
+        "hashed_password": user.password,  # Ensure this password is hashed appropriately
+        "is_admin": user.is_admin
+    })
+
+    return HTMLResponse(content=f"<html><body><h1>User {user.username} successfully created with ID {user_id}.</h1></body></html>", status_code=201)
 
 @app.get("/users/", response_class=HTMLResponse)
 def read_users():
-    with conn_pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, username FROM users")
-            users = cur.fetchall()
-            user_list = "<ul>" + "".join(f"<li>{user[1]} (ID: {user[0]})</li>" for user in users) + "</ul>"
+    users = list(users_collection.find({}, {"_id": 0, "username": 1, "id": 1}))
+    user_list = "<ul>" + "".join(f"<li>{user['username']} (ID: {user.get('id', 'N/A')})</li>" for user in users) + "</ul>"
     return HTMLResponse(content=f"<html><body><h1>List of Users</h1>{user_list}</body></html>")
 
 @app.get("/users/{user_id}", response_class=HTMLResponse)
 def read_user(user_id: int = Path(..., title="The ID of the user to retrieve")):
-    with conn_pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT username, id, is_admin FROM users WHERE id = %s", (user_id,))
-            user = cur.fetchone()
-            if not user:
-                return HTMLResponse(content="<html><body><h1>Error: User not found</h1></body></html>", status_code=404)
-            
-            username, user_id, is_admin = user
-            user_info = (
-                f"<h1>User Details</h1><ul>"
-                f"<li>Username: {username}</li>"
-                f"<li>User ID: {user_id}</li>"
-                f"<li>Admin Status: {'Yes' if is_admin else 'No'}</li>"
-                "</ul>"
-            )
+    user = users_collection.find_one({"id": user_id}, {"_id": 0})
+    if not user:
+        return HTMLResponse(content="<html><body><h1>Error: User not found</h1></body></html>", status_code=404)
+
+    user_info = (
+        f"<h1>User Details</h1><ul>"
+        f"<li>Username: {user['username']}</li>"
+        f"<li>User ID: {user.get('id', 'N/A')}</li>"
+        f"<li>Admin Status: {'Yes' if user.get('is_admin', False) else 'No'}</li>"
+        "</ul>"
+    )
     return HTMLResponse(content=f"<html><body>{user_info}</body></html>")
 
 @app.put("/users/{user_id}", response_class=HTMLResponse)
 def update_user(user_id: int, user: UserUpdate):
-    with conn_pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("UPDATE users SET username = %s, hashed_password = crypt(%s, gen_salt('bf')) WHERE id = %s", (user.username, user.password, user_id))
-            if cur.rowcount == 0:
-                return HTMLResponse(content="<html><body><h1>Error: User not found or no update made.</h1></body></html>", status_code=404)
-            conn.commit()
+    result = users_collection.update_one({"id": user_id}, {"$set": {"username": user.username, "hashed_password": user.password}})
+    if result.modified_count == 0:
+        return HTMLResponse(content="<html><body><h1>Error: User not found or no update made.</h1></body></html>", status_code=404)
     
     return HTMLResponse(content=f"<html><body><h1>User {user_id} successfully updated.</h1></body></html>")
 
 @app.delete("/users/{user_id}", response_class=HTMLResponse)
 def delete_user(user_id: int):
-    with conn_pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
-            if cur.rowcount == 0:
-                return HTMLResponse(content="<html><body><h1>Error: User not found.</h1></body></html>", status_code=404)
-            conn.commit()
+    result = users_collection.delete_one({"id": user_id})
+    if result.deleted_count == 0:
+        return HTMLResponse(content="<html><body><h1>Error: User not found.</h1></body></html>", status_code=404)
     
     return HTMLResponse(content=f"<html><body><h1>User {user_id} successfully deleted.</h1></body></html>")
+
+
+# @app.post("/users/", response_class=HTMLResponse)
+# def create_user(user: UserCreate):
+#     try:
+#         with conn_pool.connection() as conn:
+#             with conn.cursor() as cur:
+#                 cur.execute("SELECT * FROM users WHERE username = %s", (user.username,))
+#                 if cur.fetchone() is not None:
+#                     return HTMLResponse(content="<html><body><h1>Error: Username already registered</h1></body></html>", status_code=400)
+                
+#                 cur.execute("INSERT INTO users (username, hashed_password) VALUES (%s, crypt(%s, gen_salt('bf')))", (user.username, user.password))
+#                 conn.commit()
+#         return HTMLResponse(content=f"<html><body><h1>User {user.username} successfully created.</h1></body></html>", status_code=201)
+#     except errors.UniqueViolation as e:
+#         return HTMLResponse(content=f"<html><body><h1>Error: User ID already exists.</h1></body></html>", status_code=400)
+#     except Exception as e:
+#         return HTMLResponse(content=f"<html><body><h1>Server Error: {str(e)}</h1></body></html>", status_code=500)
+
+# @app.get("/users/", response_class=HTMLResponse)
+# def read_users():
+#     with conn_pool.connection() as conn:
+#         with conn.cursor() as cur:
+#             cur.execute("SELECT id, username FROM users")
+#             users = cur.fetchall()
+#             user_list = "<ul>" + "".join(f"<li>{user[1]} (ID: {user[0]})</li>" for user in users) + "</ul>"
+#     return HTMLResponse(content=f"<html><body><h1>List of Users</h1>{user_list}</body></html>")
+
+# @app.get("/users/{user_id}", response_class=HTMLResponse)
+# def read_user(user_id: int = Path(..., title="The ID of the user to retrieve")):
+#     with conn_pool.connection() as conn:
+#         with conn.cursor() as cur:
+#             cur.execute("SELECT username, id, is_admin FROM users WHERE id = %s", (user_id,))
+#             user = cur.fetchone()
+#             if not user:
+#                 return HTMLResponse(content="<html><body><h1>Error: User not found</h1></body></html>", status_code=404)
+            
+#             username, user_id, is_admin = user
+#             user_info = (
+#                 f"<h1>User Details</h1><ul>"
+#                 f"<li>Username: {username}</li>"
+#                 f"<li>User ID: {user_id}</li>"
+#                 f"<li>Admin Status: {'Yes' if is_admin else 'No'}</li>"
+#                 "</ul>"
+#             )
+#     return HTMLResponse(content=f"<html><body>{user_info}</body></html>")
+
+# @app.put("/users/{user_id}", response_class=HTMLResponse)
+# def update_user(user_id: int, user: UserUpdate):
+#     with conn_pool.connection() as conn:
+#         with conn.cursor() as cur:
+#             cur.execute("UPDATE users SET username = %s, hashed_password = crypt(%s, gen_salt('bf')) WHERE id = %s", (user.username, user.password, user_id))
+#             if cur.rowcount == 0:
+#                 return HTMLResponse(content="<html><body><h1>Error: User not found or no update made.</h1></body></html>", status_code=404)
+#             conn.commit()
+    
+#     return HTMLResponse(content=f"<html><body><h1>User {user_id} successfully updated.</h1></body></html>")
+
+# @app.delete("/users/{user_id}", response_class=HTMLResponse)
+# def delete_user(user_id: int):
+#     with conn_pool.connection() as conn:
+#         with conn.cursor() as cur:
+#             cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+#             if cur.rowcount == 0:
+#                 return HTMLResponse(content="<html><body><h1>Error: User not found.</h1></body></html>", status_code=404)
+#             conn.commit()
+    
+#     return HTMLResponse(content=f"<html><body><h1>User {user_id} successfully deleted.</h1></body></html>")
+
