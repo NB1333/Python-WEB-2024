@@ -16,8 +16,6 @@ client = MongoClient(MONGO_URL)
 # Access database
 db = client['financial_exchange']
 
-sequence_collection = db.sequences  # This holds sequence counters for various document types
-
 # Access collections
 users = db.users
 accounts = db.accounts

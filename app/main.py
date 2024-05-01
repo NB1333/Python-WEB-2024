@@ -88,52 +88,74 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     username: str
     password: str
+    is_admin: bool
+
+def get_next_sequence(name):
+    result = db.sequences.find_one_and_update(
+        {"_id": name},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True
+    )
+    return result['seq']
+
 
 @app.post("/users/", response_class=HTMLResponse)
 def create_user(user: UserCreate):
-    existing_user = users_collection.find_one({"username": user.username})
-    if existing_user:
+    if users_collection.find_one({"username": user.username}):
         return HTMLResponse(content="<html><body><h1>Error: Username already registered</h1></body></html>", status_code=400)
-
-    # Generate a unique UUID for each new user
-    user_id = str(uuid.uuid4())  # Convert UUID format to string for ease of storage and manipulation
+    
+    user_id = get_next_sequence("user_id")  # Assuming this function correctly returns an incrementing integer
 
     users_collection.insert_one({
-        "id": user_id,  # Use the UUID as the custom ID
+        "id": user_id,
         "username": user.username,
-        "hashed_password": user.password,  # Ensure this password is hashed appropriately
+        "hashed_password": user.password,  # This should be hashed securely
         "is_admin": user.is_admin
     })
 
     return HTMLResponse(content=f"<html><body><h1>User {user.username} successfully created with ID {user_id}.</h1></body></html>", status_code=201)
 
+
 @app.get("/users/", response_class=HTMLResponse)
 def read_users():
-    users = list(users_collection.find({}, {"_id": 0, "username": 1, "id": 1}))
-    user_list = "<ul>" + "".join(f"<li>{user['username']} (ID: {user.get('id', 'N/A')})</li>" for user in users) + "</ul>"
+    users = list(users_collection.find({}, {"_id": 0, "username": 1, "id": 1, "is_admin": 1}))
+    user_list = "<ul>"
+    for user in users:
+        username = user.get('username', 'No username')
+        user_id = user.get('id', 'No ID')
+        is_admin = 'Yes' if user.get('is_admin', False) else 'No'
+        user_list += f"<li>{username} (ID: {user_id} - Admin: {is_admin})</li>"
+    user_list += "</ul>"
     return HTMLResponse(content=f"<html><body><h1>List of Users</h1>{user_list}</body></html>")
+
+
 
 @app.get("/users/{user_id}", response_class=HTMLResponse)
 def read_user(user_id: int = Path(..., title="The ID of the user to retrieve")):
     user = users_collection.find_one({"id": user_id}, {"_id": 0})
     if not user:
         return HTMLResponse(content="<html><body><h1>Error: User not found</h1></body></html>", status_code=404)
-
+    
     user_info = (
         f"<h1>User Details</h1><ul>"
         f"<li>Username: {user['username']}</li>"
-        f"<li>User ID: {user.get('id', 'N/A')}</li>"
-        f"<li>Admin Status: {'Yes' if user.get('is_admin', False) else 'No'}</li>"
+        f"<li>User ID: {user['id']}</li>"
+        f"<li>Admin Status: {'Yes' if user['is_admin'] else 'No'}</li>"
         "</ul>"
     )
     return HTMLResponse(content=f"<html><body>{user_info}</body></html>")
 
+
 @app.put("/users/{user_id}", response_class=HTMLResponse)
 def update_user(user_id: int, user: UserUpdate):
-    result = users_collection.update_one({"id": user_id}, {"$set": {"username": user.username, "hashed_password": user.password}})
+    result = users_collection.update_one(
+        {"id": user_id},
+        {"$set": {"username": user.username, "hashed_password": user.password, "is_admin": user.is_admin}}
+    )
     if result.modified_count == 0:
         return HTMLResponse(content="<html><body><h1>Error: User not found or no update made.</h1></body></html>", status_code=404)
-    
+
     return HTMLResponse(content=f"<html><body><h1>User {user_id} successfully updated.</h1></body></html>")
 
 @app.delete("/users/{user_id}", response_class=HTMLResponse)
@@ -141,7 +163,7 @@ def delete_user(user_id: int):
     result = users_collection.delete_one({"id": user_id})
     if result.deleted_count == 0:
         return HTMLResponse(content="<html><body><h1>Error: User not found.</h1></body></html>", status_code=404)
-    
+
     return HTMLResponse(content=f"<html><body><h1>User {user_id} successfully deleted.</h1></body></html>")
 
 
